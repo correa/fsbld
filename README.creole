@@ -1,0 +1,18 @@
+The [[http://developer.mbed.org/users/AdamGreen/code/FlashFileSystem/ | FlashFileSystem]] can mount, read, and enumerate
+a file system image which has been appended to the compiled .bin code file before being uploaded to the mbed device. This
+fsbld utility can be used to create images to be used with that file system. The /osx subdirectory contains the
+sources and pre-built binary for the utility which I wrote on OS X.  Frank Vannieuwkerke updated these sources to
+work with Windows and those sources along with a pre-built binary can be found in the /windows subdirectory.
+
+To get the file system image onto the mbed device, you need to concatenate your binary from the compiler with the file
+system image binary created by fsbld.
+
+On *nix this can be done with the cat command.
+{{{
+cat Test_LPC1768.bin FileImage.bin >/Volumes/MBED/test.bin
+}}}
+
+On Windows this can be done with the copy command.
+{{{
+copy Test_LPC1768.bin + FileImage.bin e:\test.bin
+}}}
