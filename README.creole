@@ -3,6 +3,7 @@ a file system image which has been appended to the compiled .bin code file befor
 fsbld utility can be used to create images to be used with that file system. The /osx subdirectory contains the
 sources and pre-built binary for the utility which I wrote on OS X.  Frank Vannieuwkerke updated these sources to
 work with Windows and those sources along with a pre-built binary can be found in the /windows subdirectory.
+The Windows version also creates a C-style header file from the binary which can be included into your project.
 
 To get the file system image onto the mbed device, you need to concatenate your binary from the compiler with the file
 system image binary created by fsbld.

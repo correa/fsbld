@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <assert.h>
 #include "sys/stat.h"
 #include <dirent.h>
@@ -34,9 +35,12 @@ static void _DisplayUsage(void)
            "           contains the files to be encoded in the output binary\n"
            "           image.\n"
            "         OutputBinaryFilename is the name of the binary file to\n"
-           "           contain the resulting file system image.  This file\n"
-           "           can be appended to the end of an existing FLASH image\n"
-           "           before being deployed to the mbed device.\n");
+           "           contain the resulting file system image.\n"
+           "         A C-style header file (.h) is created from the OutputBinaryFilename\n\n"
+           "         The binary file can be appended to the end of an existing FLASH\n"
+           "           image before being deployed to the mbed device.\n\n"
+           "                               - OR -\n\n"
+           "         Import the .h file into the compiler and include it in the main file.\n");
 }
 
 struct stat s; /*include sys/stat.h if necessary */
@@ -771,6 +775,188 @@ Error:
     return Return;
 }
 
+/* Converts the binary file system image to a header file
+   
+   Parameters:
+    pFileSystemBuild is a pointer to the structure used both for input and
+        output data to/from this procedure.
+        
+   Returns:
+    0 on success and a positive error code otherwise */
+static int _CreateHeaderFile(SFileSystemBuild* pFileSystemBuild)
+{
+    int                 Return = 1;
+    int                 Result = 1;
+    FILE*               pDestFile = NULL;
+    FILE*               pSourceFile = NULL;
+    unsigned char*      pSrcBuffer = NULL;
+    char*               pDestBuffer = NULL;
+    char*               pDdotPos = NULL;
+    char*               pDestFileName = NULL;
+    long                BufLen = 0;
+    long                BinFileSize;
+    long                DestBufferSize;
+
+    const char         HeaderName[] = "#ifndef _FLASH_DRIVE_H_\n#define _FLASH_DRIVE_H_\nconst uint8_t roFlashDrive[] __attribute__ ((aligned (4))) __attribute__((section (\"FlashDrive\"), used)) = {\n\"";
+    const char         FooterName[] = "\"};\n#endif\n";
+    
+    assert ( pFileSystemBuild && 
+             pFileSystemBuild->pOutputBinaryFilename);
+    
+    /* Open the binary file to be converted to a header file. */
+    pSourceFile = fopen(pFileSystemBuild->pOutputBinaryFilename, "rb");
+    if (!pSourceFile)
+    {
+        fprintf(stderr,
+                "Failed to open %s for writing of the file system image.\n",
+                pFileSystemBuild->pOutputBinaryFilename);
+        goto Error;
+    }
+
+    /* Determine the size of the binary file */
+    Result = fseek(pSourceFile, 0, SEEK_END);
+    if (Result)
+    {
+        fprintf(stderr, "\nerror: Failed to determine file size of %s\n",
+                pFileSystemBuild->pOutputBinaryFilename);
+        goto Error;
+    }
+    BinFileSize = ftell(pSourceFile);
+
+    /* Seek back to the beginning of the source file. */
+    Result = fseek(pSourceFile, 0, SEEK_SET);
+    if (Result)
+    {
+        fprintf(stderr,
+                "error: Failed to rewind to file entry location.\n");
+        goto Error;
+    }
+
+    /* Allocate a file buffer to read the binary data. */
+    pSrcBuffer = (unsigned char*)malloc(BinFileSize * sizeof(unsigned char));
+    if (!pSrcBuffer)
+    {
+        fprintf(stderr, 
+                "error: Failed to allocate %ld bytes for the input buffer.\n", 
+                BinFileSize);
+        goto Error;
+    }
+
+    /* Allocate the ASCII file buffer to record the converted binary data.
+       - Each data line will be a representation of 16 binary bytes.
+         So, (number of data lines) = ceil(binary file size / 16)
+       - Each binary byte is represented as 4 ASCII bytes :
+         \xXX where XX is the ASCII representation of the binary byte.
+         So, the ASCII data size that represents the binary content is 4 times the binary size.
+         To this value, we need to add (number of data lines - 1) as each ASCII data line,
+         except the last one, is terminated with a '\'.
+         We need to add a second (number of data lines) to cover each line end (LF).
+         
+         ASCII data size = (4 x binary file size) + (2 * number of data lines) - 1
+    */
+    DestBufferSize = (4 * BinFileSize) + (2 * ceil(BinFileSize / 16.0f)) - 1;
+    pDestBuffer = (char*)malloc(DestBufferSize * sizeof(char));
+    if (!pDestBuffer)
+    {
+        fprintf(stderr, 
+                "error: Failed to allocate %ld bytes for the output buffer.\n", 
+                DestBufferSize);
+        goto Error;
+    }
+
+    /* Read the binary data into the source buffer. */
+    Result = fread(pSrcBuffer, BinFileSize, 1, pSourceFile);
+    if (Result != 1)
+    {
+        fprintf(stderr,
+                "error: Failed to read %ld bytes from %s.\n",
+                BinFileSize,
+                pFileSystemBuild->pOutputBinaryFilename);
+        goto Error;
+    }
+
+    /* Use the binary filename to create the header filename. */
+    BufLen = strlen(pFileSystemBuild->pOutputBinaryFilename) + 1;
+    pDestFileName = (char*)malloc(BufLen * sizeof(char));
+    if (!pDestFileName)
+    {
+        fprintf(stderr, 
+                "error: Failed to allocate %ld bytes for filename buffer.\n", 
+                BufLen);
+        goto Error;
+    }
+    memcpy(pDestFileName, pFileSystemBuild->pOutputBinaryFilename, BufLen);
+    pDdotPos = strrchr(pDestFileName,'.');
+    *(pDdotPos+1) = 'h';
+    *(pDdotPos+2) = '\0';
+    printf("\nCreating header file %s from %s...\n", pDestFileName, pFileSystemBuild->pOutputBinaryFilename);
+    pDestFile = fopen(pDestFileName, "w");
+    if (!pDestFile)
+    {
+        fprintf(stderr,
+                "Failed to open %s for writing of the file system image.\n",
+                pDestFileName);
+        goto Error;
+    }
+
+    printf("Exporting %s to %s...\n", pFileSystemBuild->pOutputBinaryFilename, pDestFileName);
+
+    /* Write the array declaration to the output file*/
+    Result = fprintf(pDestFile, "%s", HeaderName);
+    if (Result < 0)
+    {
+        fprintf(stderr,
+                "error: Failed to write to file %s.\n",
+                 pDestFileName);
+        goto Error;
+    }
+
+    /* Write the binary file content to the output file*/
+    snprintf(pDestBuffer, 1, "%s", "\0");       // Make sure the first char in pDestBuffer is NULL
+    for(long i = 0; i < BinFileSize; i++)
+    {
+        if((i % 16 == 0) && i > 0)
+            snprintf(pDestBuffer + strlen(pDestBuffer), DestBufferSize, "%s", "\\\n");
+        snprintf(pDestBuffer + strlen(pDestBuffer), DestBufferSize, "%s", "\\x");
+        snprintf(pDestBuffer + strlen(pDestBuffer), DestBufferSize, "%02X", pSrcBuffer[i]);
+    }
+
+    /* Write the destination buffer to the output file*/
+    Result = fprintf(pDestFile, "%s", pDestBuffer);
+    if (Result < 0)
+    {
+        fprintf(stderr,
+                "error: Failed to write to file %s.\n",
+                 pDestFileName);
+        goto Error;
+    }
+
+    /* Write array end to the output file*/
+    Result = fprintf(pDestFile, "%s", FooterName);
+    if (Result < 0)
+    {
+        fprintf(stderr,
+                "error: Failed to write to file %s.\n",
+                 pDestFileName);
+        goto Error;
+    }
+
+    Return = 0;
+Error:
+    free(pDestFileName);
+    pDestFileName = NULL;
+    if (pSourceFile)
+    {
+        fclose(pSourceFile);
+        pSourceFile = NULL;
+    }
+    if (pDestFile)
+    {
+        fclose(pDestFile);
+        pDestFile = NULL;
+    }
+    return Return;
+}
 
 int main(int argc, const char** argv)
 {
@@ -802,6 +988,13 @@ int main(int argc, const char** argv)
 
     /* Create the file system image containing the files just enumerated. */
     Result = _CreateFileSystemImage(&FileSystemBuild);
+    if (Result)
+    {
+        goto Error;
+    }
+    
+    /* Create the header file from the binary file. */
+    Result = _CreateHeaderFile(&FileSystemBuild);
     if (Result)
     {
         goto Error;
