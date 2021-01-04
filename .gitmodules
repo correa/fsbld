@@ -1,0 +1,3 @@
+[submodule "windows/dirent"]
+	path = windows/dirent
+	url = https://github.com/tronkko/dirent.git
